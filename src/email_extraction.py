@@ -1,14 +1,14 @@
 import msal
 import requests
 import os
-import webbrowser
-from flask import Flask, request, redirect, render_template
+from flask import Flask, request, redirect
 import configparser
 import threading
 from bs4 import BeautifulSoup
 import re
 from datetime import datetime
 import logging
+import datetime
 
 app = Flask(__name__)
 
@@ -33,43 +33,31 @@ access_token = None
 
 @app.route("/")
 def index():
-    return render_template('index.html')
+    return "Email Extraction Service is running. Use /start-extraction to begin."
 
 @app.route("/start-extraction")
 def start_extraction():
-    """
-    Triggers the email extraction process by first directing the user to Microsoft's OAuth login.
-    """
     auth_url = _build_auth_url()
+    print(f"Authentication URL: {auth_url}")
     return redirect(auth_url)
 
 @app.route("/callback")
 def callback():
-    """
-    Callback URL after Microsoft login, where we obtain the access token and trigger the background extraction.
-    """
     global access_token
     code = request.args.get("code")
     access_token = get_access_token(code)
     if access_token:
-        # Start the email extraction in a background thread
         threading.Thread(target=background_email_extraction).start()
         return "Authentication successful. Email extraction has started. You can close this window."
     else:
         return "Failed to authenticate. Please try again."
 
 def _build_auth_url():
-    """
-    Constructs the Microsoft OAuth authorization URL.
-    """
     return msal.ConfidentialClientApplication(
         CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET
     ).get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
 
 def get_access_token(code):
-    """
-    Exchanges the authorization code for an access token.
-    """
     client = msal.ConfidentialClientApplication(
         CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET
     )
@@ -84,16 +72,12 @@ def get_access_token(code):
         return None
 
 def extract_emails():
-    """
-    Extracts emails from the Microsoft Graph API, filters today's emails, and saves them as text files in the 'extracted_emails' folder.
-    """
     global access_token
     headers = {
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json'
     }
 
-    # Clear the existing directory
     if os.path.exists("extracted_emails"):
         for file in os.listdir("extracted_emails"):
             file_path = os.path.join("extracted_emails", file)
@@ -107,8 +91,8 @@ def extract_emails():
         '$select': 'subject,body,from,receivedDateTime'
     }
 
-    # Filter for today's emails
-    today = datetime.utcnow().date().isoformat()
+    # today = datetime.utcnow().date().isoformat()
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     params['$filter'] = f"receivedDateTime ge {today}T00:00:00Z and receivedDateTime le {today}T23:59:59Z"
 
     try:
@@ -122,17 +106,10 @@ def extract_emails():
             sender = email['from']['emailAddress']['address']
             date = email['receivedDateTime']
 
-            # Parse the HTML content to extract plain text
             soup = BeautifulSoup(body, 'html.parser')
-
-            # Remove unwanted tags
             for script_or_style in soup(['script', 'style']):
                 script_or_style.decompose()
-
-            # Get the text and clean it
             plain_text_body = soup.get_text(separator='\n').strip()
-
-            # Further clean the text by removing long strings of encoded text
             plain_text_body = re.sub(r'\b[A-Za-z0-9+/=]{100,}\b', '', plain_text_body)
 
             filename = f"extracted_emails/{i}.txt"
@@ -142,14 +119,11 @@ def extract_emails():
                 f.write(f"Subject: {subject}\n\n")
                 f.write(plain_text_body)
 
-        logging.info(f"Extracted {len(emails)} emails successfully!")
+        print(f"Extracted {len(emails)} emails successfully!")
     except requests.RequestException as e:
-        logging.error(f"Error extracting emails: {str(e)}")
+        print(f"Error extracting emails: {str(e)}")
 
 def background_email_extraction():
-    """
-    Function to run the email extraction in a background thread.
-    """
     extract_emails()
 
 if __name__ == "__main__":
